@@ -1,0 +1,433 @@
+---
+title: "kody"
+author: "Michał Liszkowski"
+date: '2023-05-29'
+output: pdf_document
+---
+```{r}
+
+library(openxlsx)
+data_path<-"C:\\Users\\micha\\Desktop\\studia\\mgr"
+setwd(data_path)
+library(dplyr)
+getwd()
+wibor2w <- data.frame(read.csv("plopln2w_d.csv"))
+wibor2w.r <- log(1+wibor2w$Zamkniecie*14/365)/(14/365)
+wibor1m <- data.frame(read.csv("plopln1m_d.csv"))
+wibor1m.r <- log(1+wibor1m$Zamkniecie*30/365)/(30/365)
+wibor3m <- data.frame(read.csv("plopln3m_d.csv"))
+wibor3m.r <- log(1+wibor3m$Zamkniecie*90/365)/(90/365)
+wibor6m <- data.frame(read.csv("plopln6m_d.csv"))
+wibor6m.r <- log(1+wibor6m$Zamkniecie*180/365)/(180/365)
+
+wibid2w <- data.frame(read.csv("plbpln1m_d.csv"))
+wibid2w.r <- log(1+wibid2w$Zamkniecie*14/365)/(14/365)
+wibid1m <- data.frame(read.csv("plbpln1m_d.csv"))
+wibid1m.r <- log(1+wibid1m$Zamkniecie*30/365)/(30/365)
+wibid3m <- data.frame(read.csv("plbpln3m_d.csv"))
+wibid3m.r <- log(1+wibid3m$Zamkniecie*90/365)/(90/365)
+wibid6m <- data.frame(read.csv("plbpln6m_d.csv"))
+wibid6m.r <- log(1+wibid6m$Zamkniecie*180/365)/(180/365)
+
+wimean2w.r <- as.data.frame(cbind(wibor2w$Data, 1/2*(wibor2w.r+wibid2w.r)))
+colnames(wimean2w.r) <- c("Data","Kurs")
+wimean1m.r <- as.data.frame(cbind(wibor2w$Data, 1/2*(wibor1m.r+wibid1m.r)))
+colnames(wimean1m.r) <- c("Data","Kurs")
+wimean3m.r <- as.data.frame(cbind(wibor2w$Data, 1/2*(wibor3m.r+wibid3m.r)))
+colnames(wimean3m.r) <- c("Data","Kurs")
+wimean6m.r <- as.data.frame(cbind(wibor2w$Data, 1/2*(wibor6m.r+wibid6m.r)))
+colnames(wimean6m.r) <- c("Data","Kurs")
+
+wiv <- data.frame(read.csv("wiv20.csv", sep=";"))
+
+```
+
+```{r}
+
+library(openxlsx)
+data_path<-"C:\\Users\\micha\\Desktop\\studia\\mgr"
+setwd(data_path)
+library(dplyr)
+getwd()
+wig <- data.frame(read.csv("wig20_d.csv"))
+
+wig20o <- as.data.frame(wig$Otwarcie)
+rownames(wig20o) <- wig$Data
+#wig20o <- xts(wig20o$Otwarcie, order.by = as.Date(wig20o$Data))
+
+
+wig20c <- as.data.frame(cbind(as.Date(wig$Data,"%Y-%m-%d"),wig$Zamkniecie))
+colnames(wig20c) <- c("Data","Zamknięcie")
+wig20c <- xts(wig20c$Zamknięcie, order.by = as.Date(wig20c$Data))
+
+# Obliczenie logarytmicznych zwrotów
+returns <- diff(log(wig20c))
+returns <- na.locf(returns)
+returns <- returns[-1,]
+
+```
+
+```{r}
+#bs
+
+BS <- function(S, K, T, r, sig, type){
+  
+  if(type=="c"){
+  d1 <- (log(S/K) + (r + sig^2/2)*T) / (sig*sqrt(T))
+  d2 <- d1 - sig*sqrt(T)
+  
+  value <- S*pnorm(d1) - K*exp(-r*T)*pnorm(d2)
+  return(value)}
+  
+  if(type=="p"){
+  d1 <- (log(S/K) + (r + sig^2/2)*T) / (sig*sqrt(T))
+  d2 <- d1 - sig*sqrt(T)
+  
+  value <-  - S*pnorm(-d1) + K*exp(-r*T)*pnorm(-d2) 
+  return(value)}
+}
+
+
+```
+
+```{r}
+
+#duan sgarch
+
+duan1 <- function(TypeFlag, ret, S0, K, Td, r){
+  
+  spec <- ugarchspec(variance.model = list(model = "sGARCH"),
+                     mean.model = list(armaOrder = c(0, 0)))
+  
+  fit <- ugarchfit(spec, data = ret)
+  
+  beta0 <- as.numeric(coef(fit)[2])  # GARCH Parameter Omega
+  beta1 <- as.numeric(coef(fit)[3])     # GARCH Parameter associated with lagged variance term
+  beta2 <- as.numeric(coef(fit)[4])     # GARCH Parameter associated with lagged innovation
+  lambda <- 0   # RiskNeutral Parameter
+  #H0 <- beta0 / ((1 - (1 + lambda) * beta2 - beta1))^2  # initial variance
+  H0 <- var(ret)
+  i <- 5000          # number of simulations
+  discount_factor <- exp(-r * (Td / 365))  # discount factor
+  
+  h <- matrix(0, nrow = i, ncol = Td)
+  e <- matrix(0, nrow = i, ncol = Td)
+  t <- 0:(Td-1)
+  S <- rep(S0, i)
+  z <- matrix(rnorm(i * Td), nrow = i, ncol = Td)
+  
+  for (x in 1:(i - 1)) {
+    h[x, 1] <- H0
+    e[x, 1] <- H0 * rnorm(1)
+    for (y in 1:(Td - 1)) {
+      h[x, y + 1] <- beta0 + h[x, y] * (beta1 + beta2 * (z[x, y] - lambda)^2)
+      e[x, y + 1] <- sqrt(h[x, y + 1]) * z[x, y + 1]
+    }
+  }
+  
+  sumh <- rowSums(h)
+  sume <- rowSums(e)
+  
+  for (x in 1:i) {
+    S[x] <- S[x] * exp((Td) * (r / 365) - 0.5 * sumh[x] + sume[x])
+  }
+  
+  
+  for (x in 1:i) {
+  S[x] <- max(S[x] - K, 0)
+  S[x] <- discount_factor * S[x]
+  }
+  
+  
+  if(TypeFlag == "c"){
+    price <- mean(S)
+  }
+  
+  if(TypeFlag == "p"){
+   price <- mean(S) + K*exp(-r*Td) - S0
+  }
+  
+  if(price<0){
+    price <- 0
+  }
+  
+  return(price)
+}
+
+```
+
+```{r}
+
+library(lubridate)
+library(NLP)
+library(xts)
+library(fOptions)
+
+substrRight <- function(x, n){
+  substr(x, nchar(x)-n+1, nchar(x))
+}
+
+
+hn_opcja <- function(opcja){
+  X <- as.numeric(substrRight(opcja$Nazwa[1],4))
+  S <- wig20o[opcja$Data[1],]
+  if(X/S<0.97){
+    mon <- "ITM"
+  }
+  if(X/S>=0.97 & X/S<=1.03){
+    mon <- "ATM"
+  }
+
+  if(X/S>1.03){
+    mon <- "OTM"
+  }
+  Time.inDays <- as.numeric(difftime(as.Date(opcja$Data[nrow(opcja)]),as.Date(opcja$Data[1]), units = "days"))
+  letter <- substr(opcja$Nazwa[1],5,5)
+  if(letter %in% toupper(letters[1:12])){
+    TypeFlag <- "c"
+  }
+  if(letter %in% toupper(letters[13:24])){
+    TypeFlag <- "p"
+  }
+  if(Time.inDays<14){
+    return(print("T poniżej 14 dni"))
+  }
+  if(14<=Time.inDays & Time.inDays<=30){
+    r1 <- as.numeric(wimean2w.r[wimean2w.r$Data==opcja$Data[1],]$Kurs)
+    r2 <- as.numeric(wimean1m.r[wimean1m.r$Data==opcja$Data[1],]$Kurs)
+    t1 <- 14
+    t2 <- 30
+    r <- (((r2-r1)*(Time.inDays-t1))/(t2-t1))+r1
+  }
+  if(30<Time.inDays & Time.inDays<=90){
+    r1 <- as.numeric(wimean1m.r[wimean1m.r$Data==opcja$Data[1],]$Kurs)
+    r2 <- as.numeric(wimean3m.r[wimean3m.r$Data==opcja$Data[1],]$Kurs)
+    t1 <- 30
+    t2 <- 90
+    r <- (((r2-r1)*(Time.inDays-t1))/(t2-t1))+r1
+  }
+  if(90<Time.inDays & Time.inDays<=180){
+    r1 <- as.numeric(wimean3m.r[wimean3m.r$Data==opcja$Data[1],]$Kurs)
+    r2 <- as.numeric(wimean6m.r[wimean6m.r$Data==opcja$Data[1],]$Kurs)
+    t1 <- 90
+    t2 <- 180
+    r <- (((r2-r1)*(Time.inDays-t1))/(t2-t1))+r1
+  }
+  if(Time.inDays>180){
+    return(print("T powyżej 180 dni"))
+  }
+  # Y <- format(as.POSIXct(as.Date(o18.11$Data[1]), format="%Y-%M-%D"), format = "%Y")
+  # M <- format(as.POSIXct(as.Date(o18.11$Data[1]), format="%Y-%M-%D"), format = "%M")
+  # D <- format(as.POSIXct(as.Date(o18.11$Data[1]), format="%Y-%M-%D"), format = "%D")
+  ret <- window(returns, start = as.Date(opcja$Data[1])-days(365), end = as.Date(opcja$Data[1]))
+  model <- hngarchFit(as.timeSeries(ret))
+  model <- list(lambda = model$params["lambda"], 
+                omega = model$params["omega"], 
+                alpha = model$params["alpha"],
+                beta = model$params["beta"], 
+                gamma = model$params["gamma"])
+  r.daily <- 1/100*(r/Time.inDays)
+  sigma.daily <- sqrt((model$omega + model$alpha) / (1 - model$beta - model$alpha * model$gamma^2))
+  sigmaBS <- sd(ret)
+  wivind30 <- wiv$WIV20[wiv$DATE==as.Date(opcja$Data[1])-days(30)]
+  i <- 1
+  while(identical(wivind30, numeric(0))==TRUE){
+    wivind30 <- wiv$WIV20[wiv$DATE==as.Date(opcja$Data[1])-days(30+i)]
+    i <- i+1
+  }
+  wivind1 <- wiv$WIV20[wiv$DATE==as.Date(opcja$Data[1])-days(1)]
+  i <- 1
+  while(identical(wivind1, numeric(0))==TRUE){
+    wivind1 <- wiv$WIV20[wiv$DATE==as.Date(opcja$Data[1])-days(1+i)]
+    i <- i+1
+  }
+  HN <- HNGOption(TypeFlag, model = model, S = S, X = X, Time.inDays = Time.inDays, r.daily = r.daily)$price
+  GBS <- GBSOption(TypeFlag, S = S, X = X, Time = Time.inDays, r = r.daily, b = r.daily, sigma = sigma.daily)@price
+  MyBS <- BS(S, X, Time.inDays, r.daily, sigmaBS, TypeFlag)
+  BSwiv30 <- BS(S, X, Time.inDays, r.daily, 1/10*wivind30, TypeFlag)
+  BSwiv1 <- BS(S, X, Time.inDays, r.daily, 1/10*wivind1, TypeFlag)
+  duan1 <- duan1(TypeFlag, ret, S, X, Time.inDays, r.daily)
+  real <- opcja$`Kurs zamkniecia`[1]
+  if(real<15){
+    return(print("Kurs poniżej 15"))
+  }
+  RES <- as.data.frame(c(TypeFlag, mon, Time.inDays, real, GBS, HN, MyBS, BSwiv30, BSwiv1,duan1))
+  rownames(RES) <- c("call/put","moneyness", "T", "actual","GBS","HN","MyBS", "BS WIV 30","BS WIV 1" ,"Duan")
+  colnames(RES) <- c(opcja$Nazwa[1])
+  return(RES)
+}
+
+```
+
+```{r}
+
+library(readxl)
+
+o18 <- data.frame(matrix(nrow = 10, ncol = 0))
+
+# Specify the folder path
+folder_path_18 <- "C:\\Users\\micha\\Desktop\\studia\\mgr\\09.18_opcje"
+
+# Get a list of file names in the folder
+file_18 <- list.files(folder_path_18, pattern = "\\.xls$", full.names = TRUE)
+
+# Loop through the list of file names and read each Excel file
+for (file in file_18) {
+  data <- read_excel(file)
+  o18 <- cbind(o18, hn_opcja(data))
+}  
+
+
+```
+
+```{r}
+
+o20 <- data.frame(matrix(nrow = 10, ncol = 0))
+# Specify the folder path
+folder_path_20 <- "C:\\Users\\micha\\Desktop\\studia\\mgr\\03.20_opcje"
+
+# Get a list of file names in the folder
+file_20 <- list.files(folder_path_20, pattern = "\\.xls$", full.names = TRUE)
+
+# Loop through the list of file names and read each Excel file
+for (file in file_20) {
+  data <- read_excel(file)
+  o20 <- cbind(o20, hn_opcja(data))
+}
+
+```
+
+```{r}
+
+o22 <- data.frame(matrix(nrow = 10, ncol = 0))
+# Specify the folder path
+folder_path_22 <- "C:\\Users\\micha\\Desktop\\studia\\mgr\\03.22_opcje"
+
+# Get a list of file names in the folder
+file_22 <- list.files(folder_path_22, pattern = "\\.xls$", full.names = TRUE)
+
+# Loop through the list of file names and read each Excel file
+for (file in file_22) {
+  data <- read_excel(file)
+  o22 <- cbind(o22, hn_opcja(data))
+}
+
+```
+
+```{r}
+
+#przeszacowania
+
+pgbs.18 <- rep(0,50)
+phn.18 <- rep(0,50)
+pmybs.18 <- rep(0,50)
+pwiv30.18 <- rep(0,50)
+pwiv1.18 <- rep(0,50)
+pduan.18 <- rep(0,50)
+for(i in 1:50){
+  if(o18[5,i]>o18[4,i]){
+    pgbs.18[i] <- 1
+  }
+  if(o18[6,i]>o18[4,i]){
+    phn.18[i] <- 1
+  }
+  if(o18[7,i]>o18[4,i]){
+    pmybs.18[i] <- 1
+  }
+  if(o18[8,i]>o18[4,i]){
+    pwiv30.18[i] <- 1
+  }
+  if(o18[9,i]>o18[4,i]){
+    pwiv1.18[i] <- 1
+  }
+  if(o18[10,i]>o18[4,i]){
+    pduan.18[i] <- 1
+  }
+}
+
+o18 <- rbind(o18,pgbs.18,phn.18,pmybs.18,pwiv30.18,pwiv1.18,pduan.18)                    
+```
+
+```{r}
+#MAPE
+
+library(MLmetrics)
+
+mape1.18 <- rep(0,50)
+mape2.18 <- rep(0,50)
+mape3.18 <- rep(0,50)
+mape4.18 <- rep(0,50)
+mape5.18 <- rep(0,50)
+mape6.18 <- rep(0,50)
+
+for(i in 1:50){
+  mape1.18[i] <- MAPE(as.numeric(o18[5i]),as.numeric(o18[5,i]))
+  mape2.18[i] <- MAPE(as.numeric(o18[4,i]),as.numeric(o18[6,i]))
+  mape3.18[i] <- MAPE(as.numeric(o18[4,i]),as.numeric(o18[7,i]))
+  mape4.18[i] <- MAPE(as.numeric(o18[4,i]),as.numeric(o18[8,i]))
+  mape5.18[i] <- MAPE(as.numeric(o18[4,i]),as.numeric(o18[9,i]))
+  mape6.18[i] <- MAPE(as.numeric(o18[4,i]),as.numeric(o18[10,i]))
+}
+
+o18 <- rbind(o18,mape1.18,mape2.18,mape3.18,mape4.18,mape5.18,mape6.18)
+```
+
+```{r}
+pgbs.20 <- rep(0,50)
+phn.20 <- rep(0,50)
+pmybs.20 <- rep(0,50)
+pwiv30.20 <- rep(0,50)
+pwiv1.20 <- rep(0,50)
+pduan.20 <- rep(0,50)
+for(i in 1:50){
+  if(o20[5,i]>o20[4,i]){
+    pgbs.20[i] <- 1
+  }
+  if(o20[6,i]>o20[4,i]){
+    phn.20[i] <- 1
+  }
+  if(o20[7,i]>o20[4,i]){
+    pmybs.20[i] <- 1
+  }
+  if(o20[8,i]>o20[4,i]){
+    pwiv30.20[i] <- 1
+  }
+  if(o20[9,i]>o20[4,i]){
+    pwiv1.20[i] <- 1
+  }
+  if(o20[10,i]>o20[4,i]){
+    pduan.20[i] <- 1
+  }
+}
+
+```
+
+```{r}
+pgbs.22 <- rep(0,50)
+phn.22 <- rep(0,50)
+pmybs.22 <- rep(0,50)
+pwiv30.22 <- rep(0,50)
+pwiv1.22 <- rep(0,50)
+pduan.22 <- rep(0,50)
+for(i in 1:50){
+  if(o22[5,i]>o22[4,i]){
+    pgbs.22[i] <- 1
+  }
+  if(o22[6,i]>o22[4,i]){
+    phn.22[i] <- 1
+  }
+  if(o22[7,i]>o22[4,i]){
+    pmybs.22[i] <- 1
+  }
+  if(o22[8,i]>o22[4,i]){
+    pwiv30.22[i] <- 1
+  }
+  if(o22[9,i]>o22[4,i]){
+    pwiv1.22[i] <- 1
+  }
+  if(o22[10,i]>o22[4,i]){
+    pduan.22[i] <- 1
+  }
+}
+
+```
